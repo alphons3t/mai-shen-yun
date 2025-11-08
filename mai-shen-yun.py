@@ -30,6 +30,7 @@ def preprocess(purchases, sales, recipes, shipments):
 
     merged = sales.merge(recipes, on='menu_item_id', how='left')
     merged['ingredient_used'] = merged['quantity_sold'] * merged['quantity_per_item']
+<<<<<<< HEAD
     # Keep ingredient_name in merged if it exists in recipes
     if 'ingredient_name' in recipes.columns:
         merged['ingredient_name'] = merged['ingredient_name']
@@ -38,6 +39,11 @@ def preprocess(purchases, sales, recipes, shipments):
 
     usage_weekly = merged.groupby([pd.Grouper(key='date', freq='W'), 'ingredient_id', 'ingredient_name'])['ingredient_used'].sum().reset_index()
     usage_monthly = merged.groupby([pd.Grouper(key='date', freq='M'), 'ingredient_id', 'ingredient_name'])['ingredient_used'].sum().reset_index()
+=======
+
+    usage_weekly = merged.groupby([pd.Grouper(key='date', freq='W'), 'ingredient_id'])['ingredient_used'].sum().reset_index()
+    usage_monthly = merged.groupby([pd.Grouper(key='date', freq='M'), 'ingredient_id'])['ingredient_used'].sum().reset_index()
+>>>>>>> 5915fc7666e836fb44510669a93ac24f71b0650a
 
     # 2. Calculate Total Cost (Cost Optimization)
     # Assumes 'unit_cost' column exists in purchases.csv for spending analysis
@@ -140,6 +146,7 @@ def main():
     # ---------------------------------------------------------------------
     with tabs[0]:
         st.header("Real-time Inventory Overview")
+<<<<<<< HEAD
         if 'ingredient_name' in usage.columns:
             ingredient_options = usage[['ingredient_id', 'ingredient_name']].drop_duplicates()
             ingredient_display = {row.ingredient_name: row.ingredient_id for _, row in ingredient_options.iterrows()}
@@ -148,6 +155,10 @@ def main():
         else:
             ingredient_options = usage['ingredient_id'].unique()
             selected_ingredient = st.sidebar.selectbox("Select ingredient", ingredient_options)
+=======
+        ingredient_options = usage['ingredient_id'].unique()
+        selected_ingredient = st.sidebar.selectbox("Select ingredient", ingredient_options)
+>>>>>>> 5915fc7666e836fb44510669a93ac24f71b0650a
 
         total_usage = usage['ingredient_used'].sum()
         ingredient_usage = usage[usage['ingredient_id'] == selected_ingredient]['ingredient_used'].sum()

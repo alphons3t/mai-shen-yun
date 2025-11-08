@@ -1,0 +1,4 @@
+purchase_id,ingredient_id,purchase_date,delivery_date
+P1,A1,2024-10-01,2024-10-05
+P2,A2,2024-10-02,2024-10-06
+P3,A3,2024-10-03,2024-10-04
