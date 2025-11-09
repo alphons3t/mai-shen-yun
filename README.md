@@ -76,11 +76,9 @@ Check the terminal output for the local URL (usually http://localhost:8501) and 
 
 ## Example Insights
 
-Reduce waste        | Ingredient "Tomatoes" shows consistent over-ordering; suggest ordering 10% less |
+Reduce waste        | Ingredient "Chicken Wings" shows consistent over-ordering; suggest ordering 8 fewer shipments |
 
 Low stock warning   | Only 2 days of inventory remaining based on average usage |
-
-Shipment issue      | Vendor X averages 4.2 days delay; consider adjusting orders or switching vendors |
 
 Menu strategy       | "Ginger Grilled - Savory glaze" generated from trending ingredient clusters |
 
