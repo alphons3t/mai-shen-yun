@@ -17,10 +17,15 @@ The dashboard converts raw purchase, sales, recipe, and shipment data into actio
 ## Key Features
 
 Overview & Alerts       | Inventory usage, reorder warnings, ingredient-level metrics 
+
 Forecasting             | Moving average prediction for ingredient demand 
+
 Cost Optimization       | Detects top cost drivers and highlights spending patterns 
+
 Shipments & Logistics   | Tracks delivery delays and visualizes distributions 
+
 Ordering Efficiency     | Identifies recurring waste/shortages and suggests optimal ordering 
+
 Trend Analysis & Menu   | Clusters trending ingredients using KMeans and generates menu ideas 
 
 ---
