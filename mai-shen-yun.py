@@ -3,8 +3,6 @@
 # Local URL: http://localhost:8501
 # Network URL: http://10.244.154.4:8501
 
-
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -13,23 +11,34 @@ import plotly.express as px
 from datetime import datetime
 from sklearn.cluster import KMeans
 import google.generativeai as genai
+import os
+import plotly.graph_objects as go
+import requests
+from io import BytesIO
+from PIL import Image
 
+# MUST BE FIRST STREAMLIT COMMAND
 st.set_page_config(layout="wide")
 
-gemini_key = st.secrets.get("AIzaSyDCcw9aifdCHRb6FJjVJKX7rSKY_B-eiGc")
+# Now safe to use other Streamlit commands
+gemini_key = st.secrets.get("GEMINI_API_KEY")
+openai_key = st.secrets.get("OPENAI_API_KEY")
+
 if gemini_key:
     genai.configure(api_key=gemini_key)
-else:
-    st.sidebar.warning("⚠️ GEMINI_API_KEY not found in .streamlit/secrets.toml")
-
-# Optional: Gemini test button in sidebar
-if st.sidebar.button("Test Gemini API"):
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content("Say hello from Gemini!")
-        print(response.text)
+        # Force use of a known good model for text generation
+        st.session_state.gemini_model = "gemini-1.5-flash"
+        st.sidebar.success("✅ Gemini API configured with gemini-1.5-flash")
     except Exception as e:
-        print("Gemini test failed:", e)
+        st.sidebar.warning(f"⚠️ Gemini API issue: {e}")
+else:
+    st.sidebar.warning("⚠️ GEMINI_API_KEY not found - menu generation will be basic")
+
+if openai_key:
+    st.sidebar.success("✅ OpenAI API configured (for premium images)")
+    
+# Remove the Gemini test button since we'll use it in the menu generation
 
 DATA_DIR = Path("data")
 
@@ -117,6 +126,98 @@ def generate_menu_suggestion(trending_ingredients):
         item = f"Limited-Edition: Ingredient {ing} {method} — {flavor} glaze"
         menu_items.append(item)
     return menu_items
+
+def generate_menu_image(menu_description, openai_api_key):
+    """Generate an image for a menu item using DALL-E"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {openai_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Create a better prompt for food photography
+        prompt = f"Professional food photography of {menu_description}, restaurant quality, beautifully plated, studio lighting, 4k"
+        
+        data = {
+            "model": "dall-e-3",
+            "prompt": prompt,
+            "n": 1,
+            "size": "1024x1024",
+            "quality": "standard"
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/images/generations",
+            headers=headers,
+            json=data,
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            image_url = response.json()['data'][0]['url']
+            # Download the image
+            img_response = requests.get(image_url)
+            img = Image.open(BytesIO(img_response.content))
+            return img
+        else:
+            st.error(f"Image generation failed: {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"Error generating image: {e}")
+        return None
+
+def generate_menu_with_gemini(trending_ingredients):
+    """Use Gemini to create detailed menu items with descriptions and image prompts"""
+    try:
+        # Use the model we found during initialization
+        if 'gemini_model' not in st.session_state:
+            st.error("No Gemini model available. Please check your API key.")
+            return None
+        
+        model_name = st.session_state.gemini_model
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        ingredients_str = ", ".join([str(ing) for ing in trending_ingredients[:6]])
+        prompt = f"""You are a creative restaurant chef. Create 3 innovative limited-edition menu items using these trending ingredients: {ingredients_str}
+
+For each menu item, provide:
+1. Dish Name (creative and appealing)
+2. Description (2-3 sentences, mouth-watering)
+3. Price (realistic for upscale dining, $15-$35)
+4. Why it's trending (1 sentence)
+5. Image Prompt (detailed description for AI image generation - include plating, colors, textures, lighting)
+
+Format your response EXACTLY like this:
+---
+DISH 1: [Name]
+Description: [Description]
+Price: $[XX]
+Trending Because: [Reason]
+Image Prompt: [Detailed visual description]
+---
+DISH 2: [Name]
+...
+"""
+        response = model.generate_content([prompt])  # use list to ensure v1 API compatibility
+        return response.text if hasattr(response, "text") else str(response)
+    except Exception as e:
+        st.error(f"Gemini generation failed: {e}")
+        return None
+
+def generate_pollinations_image(prompt):
+    """Generate image using Pollinations.ai (free API)"""
+    try:
+        # Pollinations.ai free image generation
+        encoded_prompt = requests.utils.quote(prompt)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        
+        response = requests.get(image_url, timeout=30)
+        if response.status_code == 200:
+            img = Image.open(BytesIO(response.content))
+            return img
+        return None
+    except Exception as e:
+        st.error(f"Image generation error: {e}")
+        return None
 
 def main():
     st.title("Mai Shan Yun — Inventory Intelligence")
@@ -223,14 +324,13 @@ def main():
     # ---------------------------------------------------------------------
     with tabs[4]:
         st.header("Ordering Efficiency & Waste Analysis")
-        months_input = st.multiselect("Select months", [5,6,7,8,9,10], default=[5,6,7,8,9,10])
+        months_input = st.multiselect("Select months", list(range(1,13)))
         merged_monthly = monthly_orders_and_usage(purchases, usage_monthly, months_input)
         st.subheader("Ordered vs Used Quantities")
         st.dataframe(merged_monthly, use_container_width=True)
 
         st.subheader("Waste / Shortage Summary")
         summary = merged_monthly.groupby('ingredient_id')[['ordered_qty', 'used_qty', 'waste', 'shortage']].sum().reset_index()
-
         st.dataframe(summary.sort_values('waste', ascending=False), use_container_width=True)
 
         # --- Interactive Surplus/Shortage Visualization ---
@@ -242,7 +342,6 @@ def main():
         pivot_df = diff_df.pivot_table(index='ingredient_id', columns='month', values='difference', aggfunc='sum').fillna(0)
         pivot_df['Average'] = pivot_df.mean(axis=1)
 
-        import plotly.graph_objects as go
         fig = go.Figure()
         months = list(pivot_df.columns)
 
@@ -316,15 +415,67 @@ def main():
             cluster_choice = st.selectbox("Choose cluster", sorted(pivot_clusters['cluster'].unique()), key='cluster_select')
             st.dataframe(pivot_clusters[pivot_clusters['cluster'] == cluster_choice], use_container_width=True)
 
-            st.subheader("Menu Suggestions")
+            st.subheader("AI-Generated Menu Suggestions")
             top_trending = pivot_clusters.groupby('ingredient_id').sum().sum(axis=1).sort_values(ascending=False).index.tolist()
-            for s in generate_menu_suggestion(top_trending):
-                st.write("•", s)
+            
+            gemini_key = st.secrets.get("GEMINI_API_KEY")
+            
+            if st.button("🤖 Generate Menu with Gemini + Images", type="primary"):
+                if gemini_key:
+                    with st.spinner("Gemini is crafting your menu..."):
+                        menu_content = generate_menu_with_gemini(top_trending)
+                        if menu_content:
+                            st.session_state.menu_content = menu_content
+                            
+                            # Parse and generate images for each dish
+                            dishes = menu_content.split("---")
+                            st.session_state.dish_images = {}
+                            
+                            for idx, dish in enumerate(dishes):
+                                if "Image Prompt:" in dish:
+                                    # Extract image prompt
+                                    prompt_start = dish.find("Image Prompt:") + len("Image Prompt:")
+                                    image_prompt = dish[prompt_start:].strip()
+                                    
+                                    with st.spinner(f"Generating image {idx+1}..."):
+                                        img = generate_pollinations_image(image_prompt)
+                                        if img:
+                                            st.session_state.dish_images[idx] = img
+                else:
+                    st.error("Please add GEMINI_API_KEY to .streamlit/secrets.toml")
+            
+            # Display generated content
+            if 'menu_content' in st.session_state:
+                dishes = st.session_state.menu_content.split("---")
+                
+                for idx, dish_text in enumerate(dishes):
+                    if dish_text.strip() and "DISH" in dish_text:
+                        col1, col2 = st.columns([1, 1])
+                        
+                        with col1:
+                            # Show generated image if available
+                            if 'dish_images' in st.session_state and idx in st.session_state.dish_images:
+                                st.image(st.session_state.dish_images[idx], use_container_width=True)
+                            else:
+                                st.info("Image generating...")
+                        
+                        with col2:
+                            st.markdown(dish_text.strip())
+                        
+                        st.markdown("---")
+            else:
+                # Show basic suggestions as fallback
+                st.write("*Click the button above to generate AI-powered menu items with images*")
+                st.write("")
+                st.write("**Quick Preview (Basic):**")
+                for s in generate_menu_suggestion(top_trending):
+                    st.write("•", s)
 
-            st.expander("Gemini Prompt").write(
-                f"Create 3 limited-edition restaurant menu items combining these trending ingredients: {', '.join(map(str, top_trending[:10]))}. "
-                "For each, include name, description, price, and reason why it fits current trends."
-            )
+            with st.expander("Gemini Prompt"):
+                st.write(
+                    f"Create 3 limited-edition restaurant menu items combining these trending ingredients: {', '.join(map(str, top_trending[:10]))}. "
+                    "For each, include name, description, price, and reason why it fits current trends."
+                )
 
 if __name__ == "__main__":
     main()
