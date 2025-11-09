@@ -1,7 +1,7 @@
 # streamlit run mai-shen-yun.py 
 # how to run this.
-#   Local URL: http://localhost:8501
-#  Network URL: http://10.244.154.4:8501
+# Local URL: http://localhost:8501
+# Network URL: http://10.244.154.4:8501
 
 
 # app.py
@@ -12,16 +12,32 @@ from pathlib import Path
 import plotly.express as px
 from datetime import datetime
 from sklearn.cluster import KMeans
+import google.generativeai as genai
+
+st.set_page_config(layout="wide")
+
+gemini_key = st.secrets.get("AIzaSyDCcw9aifdCHRb6FJjVJKX7rSKY_B-eiGc")
+if gemini_key:
+    genai.configure(api_key=gemini_key)
+else:
+    st.sidebar.warning("⚠️ GEMINI_API_KEY not found in .streamlit/secrets.toml")
+
+# Optional: Gemini test button in sidebar
+if st.sidebar.button("Test Gemini API"):
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content("Say hello from Gemini!")
+        print(response.text)
+    except Exception as e:
+        print("Gemini test failed:", e)
 
 DATA_DIR = Path("data")
 
 @st.cache_data
 def load_csv(name):
-    # Added error handling for missing files/folders
     return pd.read_csv(DATA_DIR/name)
 
 def preprocess(purchases, sales, recipes, shipments):
-    # Data Cleaning and Merging
     sales['date'] = pd.to_datetime(sales['date'])
     purchases['date'] = pd.to_datetime(purchases['date'])
     shipments['purchase_date'] = pd.to_datetime(shipments['purchase_date'])
@@ -30,29 +46,17 @@ def preprocess(purchases, sales, recipes, shipments):
 
     merged = sales.merge(recipes, on='menu_item_id', how='left')
     merged['ingredient_used'] = merged['quantity_sold'] * merged['quantity_per_item']
-<<<<<<< HEAD
-    # Keep ingredient_name in merged if it exists in recipes
-    if 'ingredient_name' in recipes.columns:
-        merged['ingredient_name'] = merged['ingredient_name']
-    elif 'ingredient' in recipes.columns:
-        merged['ingredient_name'] = merged['ingredient']
 
-    usage_weekly = merged.groupby([pd.Grouper(key='date', freq='W'), 'ingredient_id', 'ingredient_name'])['ingredient_used'].sum().reset_index()
-    usage_monthly = merged.groupby([pd.Grouper(key='date', freq='M'), 'ingredient_id', 'ingredient_name'])['ingredient_used'].sum().reset_index()
-=======
-
+    # Group by ingredient_id only (no ingredient_name in recipes.csv)
     usage_weekly = merged.groupby([pd.Grouper(key='date', freq='W'), 'ingredient_id'])['ingredient_used'].sum().reset_index()
     usage_monthly = merged.groupby([pd.Grouper(key='date', freq='M'), 'ingredient_id'])['ingredient_used'].sum().reset_index()
->>>>>>> 5915fc7666e836fb44510669a93ac24f71b0650a
 
-    # 2. Calculate Total Cost (Cost Optimization)
-    # Assumes 'unit_cost' column exists in purchases.csv for spending analysis
+    # Calculate Total Cost
     if 'unit_cost' in purchases.columns:
         purchases['total_cost'] = purchases['quantity'] * purchases['unit_cost']
     else:
-        # Placeholder cost if 'unit_cost' is missing - important for robustness
         purchases['total_cost'] = purchases['quantity'] * 1 
-        st.sidebar.warning("Using quantity as a proxy for cost as 'unit_cost' column was not found in purchases.csv. Results are not actual dollar amounts.")
+        st.sidebar.warning("Using quantity as a proxy for cost as 'unit_cost' column was not found in purchases.csv.")
 
     return usage_weekly, usage_monthly, purchases, shipments
 
@@ -110,12 +114,11 @@ def generate_menu_suggestion(trending_ingredients):
     for i, ing in enumerate(top):
         method = cooking_methods[i % len(cooking_methods)]
         flavor = flavor_profiles[i % len(flavor_profiles)]
-        item = f"Limited-Edition: {ing} {method} — {flavor} glaze"
+        item = f"Limited-Edition: Ingredient {ing} {method} — {flavor} glaze"
         menu_items.append(item)
     return menu_items
 
 def main():
-    st.set_page_config(layout="wide")
     st.title("Mai Shan Yun — Inventory Intelligence")
 
     st.sidebar.header("Data Configuration")
@@ -146,19 +149,7 @@ def main():
     # ---------------------------------------------------------------------
     with tabs[0]:
         st.header("Real-time Inventory Overview")
-<<<<<<< HEAD
-        if 'ingredient_name' in usage.columns:
-            ingredient_options = usage[['ingredient_id', 'ingredient_name']].drop_duplicates()
-            ingredient_display = {row.ingredient_name: row.ingredient_id for _, row in ingredient_options.iterrows()}
-            selected_name = st.sidebar.selectbox("Select ingredient", list(ingredient_display.keys()))
-            selected_ingredient = ingredient_display[selected_name]
-        else:
-            ingredient_options = usage['ingredient_id'].unique()
-            selected_ingredient = st.sidebar.selectbox("Select ingredient", ingredient_options)
-=======
-        ingredient_options = usage['ingredient_id'].unique()
-        selected_ingredient = st.sidebar.selectbox("Select ingredient", ingredient_options)
->>>>>>> 5915fc7666e836fb44510669a93ac24f71b0650a
+        selected_ingredient = st.sidebar.selectbox("Select ingredient", usage['ingredient_id'].unique(), key='overview_select')
 
         total_usage = usage['ingredient_used'].sum()
         ingredient_usage = usage[usage['ingredient_id'] == selected_ingredient]['ingredient_used'].sum()
@@ -167,9 +158,9 @@ def main():
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Usage (All)", f"{total_usage:.0f}")
-        col2.metric(f"{selected_ingredient} Usage", f"{ingredient_usage:.0f}")
+        col2.metric(f"Ingredient {selected_ingredient} Usage", f"{ingredient_usage:.0f}")
         col3.metric("Total Purchases", f"{total_purchases_q:.0f}")
-        col4.metric(f"{selected_ingredient} Purchases", f"{ingredient_purchases_q:.0f}")
+        col4.metric(f"Ingredient {selected_ingredient} Purchases", f"{ingredient_purchases_q:.0f}")
 
         st.subheader("Monthly Usage Trends")
         df_monthly = usage_monthly.groupby(usage_monthly['date'].dt.to_period('M'))['ingredient_used'].sum().reset_index()
@@ -197,7 +188,7 @@ def main():
         forecast_values = [df_forecast['moving_avg'].iloc[-1]] * 4
         forecast_df = pd.DataFrame({'date': forecast_dates, 'forecasted_usage': forecast_values})
 
-        fig = px.line(df_forecast, x='date', y='ingredient_used', title=f'Usage Forecast: {forecast_ingredient}')
+        fig = px.line(df_forecast, x='date', y='ingredient_used', title=f'Usage Forecast: Ingredient {forecast_ingredient}')
         fig.add_scatter(x=forecast_df['date'], y=forecast_df['forecasted_usage'], mode='lines+markers', name='Forecast')
         st.plotly_chart(fig, use_container_width=True)
         st.metric("Forecasted Demand (4 Weeks)", f"{sum(forecast_values):.0f}")
@@ -239,7 +230,72 @@ def main():
 
         st.subheader("Waste / Shortage Summary")
         summary = merged_monthly.groupby('ingredient_id')[['ordered_qty', 'used_qty', 'waste', 'shortage']].sum().reset_index()
+
         st.dataframe(summary.sort_values('waste', ascending=False), use_container_width=True)
+
+        # --- Interactive Surplus/Shortage Visualization ---
+        st.subheader("Interactive Surplus/Shortage by Month")
+
+        # Pivot data to resemble standalone figure structure
+        diff_df = merged_monthly.copy()
+        diff_df['difference'] = diff_df['ordered_qty'] - diff_df['used_qty']
+        pivot_df = diff_df.pivot_table(index='ingredient_id', columns='month', values='difference', aggfunc='sum').fillna(0)
+        pivot_df['Average'] = pivot_df.mean(axis=1)
+
+        import plotly.graph_objects as go
+        fig = go.Figure()
+        months = list(pivot_df.columns)
+
+        for month in months:
+            fig.add_trace(go.Bar(
+                x=pivot_df.index.astype(str),
+                y=pivot_df[month],
+                name=str(month),
+                visible=True,
+                marker_color=['green' if v > 0 else 'red' for v in pivot_df[month]]
+            ))
+
+        n = len(months)
+        buttons = []
+        buttons.append(dict(
+            label="Show All Months",
+            method="update",
+            args=[{"visible": [True] * n},
+                  {"title": "All Months: Ingredient Surplus (+) / Shortage (–)"}]
+        ))
+
+        for i, month in enumerate(months):
+            visibility = [False] * n
+            visibility[i] = True
+            buttons.append(dict(
+                label=str(month),
+                method="update",
+                args=[{"visible": visibility},
+                      {"title": f"Ingredient Surplus (+) / Shortage (–): {month}"}]
+            ))
+
+        fig.update_layout(
+            updatemenus=[
+                dict(
+                    buttons=buttons,
+                    direction="down",
+                    showactive=True,
+                    x=1.05,
+                    xanchor="left",
+                    y=1.15,
+                    yanchor="top"
+                )
+            ],
+            title="All Months: Ingredient Surplus (+) / Shortage (–)",
+            xaxis_title="Ingredient",
+            yaxis_title="Difference (Ordered – Used)",
+            xaxis_tickangle=-45,
+            template="plotly_white",
+            height=600,
+            legend_title="Month"
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("Ordering Suggestions")
         suggestions = suggest_ordering_changes(merged_monthly)
@@ -257,7 +313,7 @@ def main():
         else:
             st.subheader("Cluster Summary")
             st.dataframe(cluster_summary, use_container_width=True)
-            cluster_choice = st.selectbox("Choose cluster", sorted(pivot_clusters['cluster'].unique()))
+            cluster_choice = st.selectbox("Choose cluster", sorted(pivot_clusters['cluster'].unique()), key='cluster_select')
             st.dataframe(pivot_clusters[pivot_clusters['cluster'] == cluster_choice], use_container_width=True)
 
             st.subheader("Menu Suggestions")
@@ -266,7 +322,7 @@ def main():
                 st.write("•", s)
 
             st.expander("Gemini Prompt").write(
-                f"Create 3 limited-edition restaurant menu items combining these trending ingredients: {', '.join(top_trending[:10])}. "
+                f"Create 3 limited-edition restaurant menu items combining these trending ingredients: {', '.join(map(str, top_trending[:10]))}. "
                 "For each, include name, description, price, and reason why it fits current trends."
             )
 
