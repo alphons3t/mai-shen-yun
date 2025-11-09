@@ -77,8 +77,11 @@ Check the terminal output for the local URL (usually http://localhost:8501) and 
 ## Example Insights
 
 Reduce waste        | Ingredient "Tomatoes" shows consistent over-ordering; suggest ordering 10% less |
+
 Low stock warning   | Only 2 days of inventory remaining based on average usage |
+
 Shipment issue      | Vendor X averages 4.2 days delay; consider adjusting orders or switching vendors |
+
 Menu strategy       | "Ginger Grilled - Savory glaze" generated from trending ingredient clusters |
 
 ---
@@ -86,8 +89,11 @@ Menu strategy       | "Ginger Grilled - Savory glaze" generated from trending in
 ## Tech Stack
 
 Frontend dashboard  | Streamlit
+
 Data processing     | Pandas / NumPy
+
 Visualization       | Plotly Express
+
 ML clustering       | Scikit-learn (KMeans)
 
 ---
