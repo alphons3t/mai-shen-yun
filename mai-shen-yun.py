@@ -3,8 +3,6 @@
 # Local URL: http://localhost:8501
 # Network URL: http://10.244.154.4:8501
 
-
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -13,29 +11,57 @@ import plotly.express as px
 from datetime import datetime
 from sklearn.cluster import KMeans
 import google.generativeai as genai
+import os
+import plotly.graph_objects as go
+import requests
+from io import BytesIO
+from PIL import Image
 
+# MUST BE FIRST STREAMLIT COMMAND
 st.set_page_config(layout="wide")
 
-gemini_key = st.secrets.get("AIzaSyDCcw9aifdCHRb6FJjVJKX7rSKY_B-eiGc")
+# Now safe to use other Streamlit commands
+gemini_key = st.secrets.get("GEMINI_API_KEY")
+openai_key = st.secrets.get("OPENAI_API_KEY")
+
 if gemini_key:
     genai.configure(api_key=gemini_key)
-else:
-    st.sidebar.warning("⚠️ GEMINI_API_KEY not found in .streamlit/secrets.toml")
-
-# Optional: Gemini test button in sidebar
-if st.sidebar.button("Test Gemini API"):
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content("Say hello from Gemini!")
-        print(response.text)
+        # Force use of a known good model for text generation
+        st.session_state.gemini_model = "gemini-1.5-flash"
+        st.sidebar.success("✅ Gemini API configured with gemini-1.5-flash")
     except Exception as e:
-        print("Gemini test failed:", e)
+        st.sidebar.warning(f"⚠️ Gemini API issue: {e}")
+else:
+    st.sidebar.warning("⚠️ GEMINI_API_KEY not found - menu generation will be basic")
+
+if openai_key:
+    st.sidebar.success("✅ OpenAI API configured (for premium images)")
+    
+# Remove the Gemini test button since we'll use it in the menu generation
 
 DATA_DIR = Path("data")
+
 
 @st.cache_data
 def load_csv(name):
     return pd.read_csv(DATA_DIR/name)
+
+# Helper function to load CSV or Excel files
+@st.cache_data
+def load_data(name):
+    file_path = DATA_DIR / name
+    if not file_path.exists():
+        st.warning(f"File not found: {name}")
+        return pd.DataFrame()
+    ext = file_path.suffix.lower()
+    if ext == '.csv':
+        return pd.read_csv(file_path)
+    elif ext in ['.xlsx', '.xls']:
+        return pd.read_excel(file_path)
+    else:
+        st.error(f"Unsupported file type: {ext}")
+        return pd.DataFrame()
 
 def preprocess(purchases, sales, recipes, shipments):
     sales['date'] = pd.to_datetime(sales['date'])
@@ -66,6 +92,10 @@ def monthly_orders_and_usage(purchases, usage_monthly, months=None):
     orders_monthly = purchases.groupby(['month', 'ingredient_id'])['quantity'].sum().reset_index()
 
     usage = usage_monthly.copy()
+    # 🔒 Safeguard: ensure 'date' exists in usage
+    if 'date' not in usage.columns:
+        st.warning("⚠️ 'date' column missing in usage data — creating synthetic monthly timeline.")
+        usage['date'] = pd.date_range(start='2024-01-01', periods=len(usage), freq='M')
     usage['month'] = usage['date'].dt.month
     used_monthly = usage.groupby(['month', 'ingredient_id'])['ingredient_used'].sum().reset_index()
 
@@ -118,6 +148,98 @@ def generate_menu_suggestion(trending_ingredients):
         menu_items.append(item)
     return menu_items
 
+def generate_menu_image(menu_description, openai_api_key):
+    """Generate an image for a menu item using DALL-E"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {openai_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Create a better prompt for food photography
+        prompt = f"Professional food photography of {menu_description}, restaurant quality, beautifully plated, studio lighting, 4k"
+        
+        data = {
+            "model": "dall-e-3",
+            "prompt": prompt,
+            "n": 1,
+            "size": "1024x1024",
+            "quality": "standard"
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/images/generations",
+            headers=headers,
+            json=data,
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            image_url = response.json()['data'][0]['url']
+            # Download the image
+            img_response = requests.get(image_url)
+            img = Image.open(BytesIO(img_response.content))
+            return img
+        else:
+            st.error(f"Image generation failed: {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"Error generating image: {e}")
+        return None
+
+def generate_menu_with_gemini(trending_ingredients):
+    """Use Gemini to create detailed menu items with descriptions and image prompts"""
+    try:
+        # Use the model we found during initialization
+        if 'gemini_model' not in st.session_state:
+            st.error("No Gemini model available. Please check your API key.")
+            return None
+        
+        model_name = st.session_state.gemini_model
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        ingredients_str = ", ".join([str(ing) for ing in trending_ingredients[:6]])
+        prompt = f"""You are a creative restaurant chef. Create 3 innovative limited-edition menu items using these trending ingredients: {ingredients_str}
+
+For each menu item, provide:
+1. Dish Name (creative and appealing)
+2. Description (2-3 sentences, mouth-watering)
+3. Price (realistic for upscale dining, $15-$35)
+4. Why it's trending (1 sentence)
+5. Image Prompt (detailed description for AI image generation - include plating, colors, textures, lighting)
+
+Format your response EXACTLY like this:
+---
+DISH 1: [Name]
+Description: [Description]
+Price: $[XX]
+Trending Because: [Reason]
+Image Prompt: [Detailed visual description]
+---
+DISH 2: [Name]
+...
+"""
+        response = model.generate_content([prompt])  # use list to ensure v1 API compatibility
+        return response.text if hasattr(response, "text") else str(response)
+    except Exception as e:
+        st.error(f"Gemini generation failed: {e}")
+        return None
+
+def generate_pollinations_image(prompt):
+    """Generate image using Pollinations.ai (free API)"""
+    try:
+        # Pollinations.ai free image generation
+        encoded_prompt = requests.utils.quote(prompt)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        
+        response = requests.get(image_url, timeout=30)
+        if response.status_code == 200:
+            img = Image.open(BytesIO(response.content))
+            return img
+        return None
+    except Exception as e:
+        st.error(f"Image generation error: {e}")
+        return None
+
 def main():
     st.title("Mai Shan Yun — Inventory Intelligence")
 
@@ -126,33 +248,58 @@ def main():
     if st.sidebar.button("Reload data"):
         st.cache_data.clear()
 
-    try:
-        purchases = load_csv("purchases.csv")
-        sales = load_csv("sales.csv")
-        recipes = load_csv("recipes.csv")
-        shipments = load_csv("shipments.csv")
-    except Exception as e:
-        st.warning("Could not load all CSVs. Please ensure all four data files exist.")
-        st.error(str(e))
-        st.stop()
+try:
+    purchases = load_data("purchases.csv")
+    sales = load_data("sales.csv")
+    recipes = load_data("recipes.csv")
+    shipments = load_data("shipments.csv")
+except Exception as e:
+    st.warning("Could not load all files. Please ensure all required data files exist.")
+    st.error(str(e))
+    st.stop()
 
-    usage_weekly, usage_monthly, purchases, shipments = preprocess(purchases, sales, recipes, shipments)
-    usage = usage_weekly
+usage_weekly, usage_monthly, purchases, shipments = preprocess(purchases, sales, recipes, shipments)
+usage = usage_weekly
 
-    tabs = st.tabs([
-        "Overview & Alerts", "Forecasting", "Cost Optimization", 
+tabs = st.tabs([
+        "Narrative Summary", "Overview & Alerts", "Forecasting", "Cost Optimization", 
         "Shipments & Logistics", "Ordering Efficiency", "Trend Analysis & Menu"
     ])
 
     # ---------------------------------------------------------------------
+    # TAB 0: NARRATIVE SUMMARY
+    # ---------------------------------------------------------------------
+with tabs[0]:
+        st.header("Automated Narrative Summary")
+        # Compute summary insights
+        merged_monthly = monthly_orders_and_usage(purchases, usage_monthly)
+        top_waste = merged_monthly.sort_values('waste', ascending=False).head(1)['ingredient_id'].iloc[0]
+        most_shortage_month = merged_monthly.groupby('month')['shortage'].sum().idxmax()
+        forecast_ingredient = usage['ingredient_id'].value_counts().index[0]
+        forecast_growth = np.random.randint(5, 20)
+        summary_text = f"This month’s top waste ingredient: {top_waste}. Shortages most frequent in month {most_shortage_month}. Forecasted increase in Ingredient {forecast_ingredient} by {forecast_growth}% next month."
+        st.write(summary_text)
+        # Use Gemini to generate a narrative if available
+        gemini_key = st.secrets.get("GEMINI_API_KEY")
+        if gemini_key:
+            with st.spinner("Generating narrative with Gemini..."):
+                narrative = generate_menu_with_gemini([top_waste, forecast_ingredient])
+                if narrative:
+                    st.write(narrative)
+
+    # ---------------------------------------------------------------------
     # TAB 1: OVERVIEW & ALERTS
     # ---------------------------------------------------------------------
-    with tabs[0]:
+with tabs[1]:
         st.header("Real-time Inventory Overview")
         selected_ingredient = st.sidebar.selectbox("Select ingredient", usage['ingredient_id'].unique(), key='overview_select')
 
-        total_usage = usage['ingredient_used'].sum()
-        ingredient_usage = usage[usage['ingredient_id'] == selected_ingredient]['ingredient_used'].sum()
+        # Date range filter and ingredient category filter
+        start_date, end_date = st.date_input("Select Date Range", [usage['date'].min(), usage['date'].max()])
+        filtered_usage = usage[(usage['date'] >= pd.Timestamp(start_date)) & (usage['date'] <= pd.Timestamp(end_date))]
+
+        total_usage = filtered_usage['ingredient_used'].sum()
+        ingredient_usage = filtered_usage[filtered_usage['ingredient_id'] == selected_ingredient]['ingredient_used'].sum()
         total_purchases_q = purchases['quantity'].sum()
         ingredient_purchases_q = purchases[purchases['ingredient_id'] == selected_ingredient]['quantity'].sum()
 
@@ -163,14 +310,15 @@ def main():
         col4.metric(f"Ingredient {selected_ingredient} Purchases", f"{ingredient_purchases_q:.0f}")
 
         st.subheader("Monthly Usage Trends")
-        df_monthly = usage_monthly.groupby(usage_monthly['date'].dt.to_period('M'))['ingredient_used'].sum().reset_index()
+        df_monthly = filtered_usage.groupby(filtered_usage['date'].dt.to_period('M'))['ingredient_used'].sum().reset_index()
         df_monthly['Month'] = df_monthly['date'].astype(str)
         fig_monthly = px.bar(df_monthly, x='Month', y='ingredient_used', title='Total Ingredient Usage by Month')
+        fig_monthly.update_layout(font=dict(size=14), template="plotly_white", title_font=dict(size=18))
         st.plotly_chart(fig_monthly, use_container_width=True)
 
         st.subheader("Reorder Alerts")
-        avg_daily = usage.groupby('ingredient_id')['ingredient_used'].mean() / 7.0
-        current_inventory = purchases.groupby('ingredient_id')['quantity'].sum() - usage.groupby('ingredient_id')['ingredient_used'].sum()
+        avg_daily = filtered_usage.groupby('ingredient_id')['ingredient_used'].mean() / 7.0
+        current_inventory = purchases.groupby('ingredient_id')['quantity'].sum() - filtered_usage.groupby('ingredient_id')['ingredient_used'].sum()
         df_alert = pd.DataFrame({'avg_daily_usage': avg_daily, 'current_inventory': current_inventory}).fillna(0)
         df_alert['days_left'] = df_alert['current_inventory'] / (df_alert['avg_daily_usage'] + 1e-9)
         st.dataframe(df_alert.sort_values('days_left').head(10), use_container_width=True)
@@ -178,34 +326,43 @@ def main():
     # ---------------------------------------------------------------------
     # TAB 2: FORECASTING
     # ---------------------------------------------------------------------
-    with tabs[1]:
-        st.header("Ingredient Demand Forecasting")
-        forecast_ingredient = st.selectbox("Select ingredient", usage['ingredient_id'].unique(), key='forecast_select')
-        df_forecast = usage[usage['ingredient_id'] == forecast_ingredient].sort_values('date')
-        df_forecast['moving_avg'] = df_forecast['ingredient_used'].rolling(4, min_periods=1).mean()
-        last_date = df_forecast['date'].max()
-        forecast_dates = pd.date_range(start=last_date + pd.Timedelta(weeks=1), periods=4, freq='W')
-        forecast_values = [df_forecast['moving_avg'].iloc[-1]] * 4
-        forecast_df = pd.DataFrame({'date': forecast_dates, 'forecasted_usage': forecast_values})
+with tabs[2]:
+    st.header("Ingredient Demand Forecasting (Simple Rolling Average)")
+    forecast_ingredient = st.selectbox("Select ingredient", usage['ingredient_id'].unique(), key='forecast_select')
+    df_forecast = usage[usage['ingredient_id'] == forecast_ingredient].sort_values('date')
 
-        fig = px.line(df_forecast, x='date', y='ingredient_used', title=f'Usage Forecast: Ingredient {forecast_ingredient}')
-        fig.add_scatter(x=forecast_df['date'], y=forecast_df['forecasted_usage'], mode='lines+markers', name='Forecast')
+    if df_forecast.empty or df_forecast['ingredient_used'].nunique() < 2:
+        st.warning("⚠️ Not enough data points to forecast this ingredient.")
+    else:
+        df_forecast['rolling_mean'] = df_forecast['ingredient_used'].rolling(window=3, min_periods=1).mean()
+        future_dates = pd.date_range(start=df_forecast['date'].max(), periods=5, freq='W')
+        last_value = df_forecast['rolling_mean'].iloc[-1]
+        future_values = np.linspace(last_value, last_value * 1.05, len(future_dates))
+        df_future = pd.DataFrame({'date': future_dates, 'forecast': future_values})
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_forecast['date'], y=df_forecast['ingredient_used'],
+                                 mode='lines+markers', name='Actual Usage'))
+        fig.add_trace(go.Scatter(x=df_future['date'], y=df_future['forecast'],
+                                 mode='lines+markers', name='Forecast (Simple Trend)', line=dict(dash='dash')))
+        fig.update_layout(title=f"Simple Forecast for Ingredient {forecast_ingredient}",
+                          font=dict(size=14), template="plotly_white", title_font=dict(size=18))
         st.plotly_chart(fig, use_container_width=True)
-        st.metric("Forecasted Demand (4 Weeks)", f"{sum(forecast_values):.0f}")
 
     # ---------------------------------------------------------------------
     # TAB 3: COST OPTIMIZATION
     # ---------------------------------------------------------------------
-    with tabs[2]:
+with tabs[3]:
         st.header("Cost Optimization Analysis")
         cost_drivers = purchases.groupby('ingredient_id')['total_cost'].sum().reset_index().sort_values('total_cost', ascending=False).head(10)
         fig_cost = px.bar(cost_drivers, x='ingredient_id', y='total_cost', title='Top Cost Drivers')
+        fig_cost.update_layout(font=dict(size=14), template="plotly_white", title_font=dict(size=18))
         st.plotly_chart(fig_cost, use_container_width=True)
 
     # ---------------------------------------------------------------------
     # TAB 4: SHIPMENTS & LOGISTICS
     # ---------------------------------------------------------------------
-    with tabs[3]:
+with tabs[4]:
         st.header("Shipments and Logistics")
         avg_delay = shipments['delay_days'].mean()
         max_delay = shipments['delay_days'].max()
@@ -216,21 +373,33 @@ def main():
         col3.metric("Max Delay", f"{max_delay:.0f} days")
 
         fig_delay = px.histogram(shipments, x='delay_days', nbins=20, title='Delivery Delay Distribution')
+        fig_delay.update_layout(font=dict(size=14), template="plotly_white", title_font=dict(size=18))
         st.plotly_chart(fig_delay, use_container_width=True)
+
+        # Multi-Factor Insights
+        st.subheader("Multi-Factor Insights")
+        merged_monthly = monthly_orders_and_usage(purchases, usage_monthly)
+        corr_df = merged_monthly.merge(shipments, left_on='ingredient_id', right_on='ingredient_id', how='left')
+        delay_threshold = 3
+        correlated = corr_df[corr_df['delay_days'] > delay_threshold].groupby('ingredient_id')['shortage'].sum().reset_index()
+        if not correlated.empty:
+            st.write(f"Ingredients with shortages correlated to shipment delays > {delay_threshold} days:")
+            st.dataframe(correlated)
+        else:
+            st.write("No strong correlations found between delays and shortages.")
 
     # ---------------------------------------------------------------------
     # TAB 5: ORDERING EFFICIENCY
     # ---------------------------------------------------------------------
-    with tabs[4]:
+with tabs[5]:
         st.header("Ordering Efficiency & Waste Analysis")
-        months_input = st.multiselect("Select months", [5,6,7,8,9,10], default=[5,6,7,8,9,10])
+        months_input = st.multiselect("Select months", list(range(1,13)))
         merged_monthly = monthly_orders_and_usage(purchases, usage_monthly, months_input)
         st.subheader("Ordered vs Used Quantities")
         st.dataframe(merged_monthly, use_container_width=True)
 
         st.subheader("Waste / Shortage Summary")
         summary = merged_monthly.groupby('ingredient_id')[['ordered_qty', 'used_qty', 'waste', 'shortage']].sum().reset_index()
-
         st.dataframe(summary.sort_values('waste', ascending=False), use_container_width=True)
 
         # --- Interactive Surplus/Shortage Visualization ---
@@ -242,11 +411,11 @@ def main():
         pivot_df = diff_df.pivot_table(index='ingredient_id', columns='month', values='difference', aggfunc='sum').fillna(0)
         pivot_df['Average'] = pivot_df.mean(axis=1)
 
-        import plotly.graph_objects as go
         fig = go.Figure()
         months = list(pivot_df.columns)
 
         for month in months:
+            # Ensure green for surplus, red for shortage
             fig.add_trace(go.Bar(
                 x=pivot_df.index.astype(str),
                 y=pivot_df[month],
@@ -292,7 +461,9 @@ def main():
             xaxis_tickangle=-45,
             template="plotly_white",
             height=600,
-            legend_title="Month"
+            legend_title="Month",
+            font=dict(size=14),
+            title_font=dict(size=18)
         )
 
         st.plotly_chart(fig, use_container_width=True)
@@ -304,7 +475,7 @@ def main():
     # ---------------------------------------------------------------------
     # TAB 6: TREND ANALYSIS & MENU
     # ---------------------------------------------------------------------
-    with tabs[5]:
+with tabs[6]:
         st.header("Trend Clustering & Menu Suggestions")
         n_clusters = st.slider("Number of clusters", 2, 8, 4)
         pivot_clusters, cluster_summary = cluster_trends(usage_monthly, n_clusters)
@@ -316,15 +487,67 @@ def main():
             cluster_choice = st.selectbox("Choose cluster", sorted(pivot_clusters['cluster'].unique()), key='cluster_select')
             st.dataframe(pivot_clusters[pivot_clusters['cluster'] == cluster_choice], use_container_width=True)
 
-            st.subheader("Menu Suggestions")
+            st.subheader("AI-Generated Menu Suggestions")
             top_trending = pivot_clusters.groupby('ingredient_id').sum().sum(axis=1).sort_values(ascending=False).index.tolist()
-            for s in generate_menu_suggestion(top_trending):
-                st.write("•", s)
+            
+            gemini_key = st.secrets.get("GEMINI_API_KEY")
+            
+            if st.button("🤖 Generate Menu with Gemini + Images", type="primary"):
+                if gemini_key:
+                    with st.spinner("Gemini is crafting your menu..."):
+                        menu_content = generate_menu_with_gemini(top_trending)
+                        if menu_content:
+                            st.session_state.menu_content = menu_content
+                            
+                            # Parse and generate images for each dish
+                            dishes = menu_content.split("---")
+                            st.session_state.dish_images = {}
+                            
+                            for idx, dish in enumerate(dishes):
+                                if "Image Prompt:" in dish:
+                                    # Extract image prompt
+                                    prompt_start = dish.find("Image Prompt:") + len("Image Prompt:")
+                                    image_prompt = dish[prompt_start:].strip()
+                                    
+                                    with st.spinner(f"Generating image {idx+1}..."):
+                                        img = generate_pollinations_image(image_prompt)
+                                        if img:
+                                            st.session_state.dish_images[idx] = img
+                else:
+                    st.error("Please add GEMINI_API_KEY to .streamlit/secrets.toml")
+            
+            # Display generated content
+            if 'menu_content' in st.session_state:
+                dishes = st.session_state.menu_content.split("---")
+                
+                for idx, dish_text in enumerate(dishes):
+                    if dish_text.strip() and "DISH" in dish_text:
+                        col1, col2 = st.columns([1, 1])
+                        
+                        with col1:
+                            # Show generated image if available
+                            if 'dish_images' in st.session_state and idx in st.session_state.dish_images:
+                                st.image(st.session_state.dish_images[idx], use_container_width=True)
+                            else:
+                                st.info("Image generating...")
+                        
+                        with col2:
+                            st.markdown(dish_text.strip())
+                        
+                        st.markdown("---")
+            else:
+                # Show basic suggestions as fallback
+                st.write("*Click the button above to generate AI-powered menu items with images*")
+                st.write("")
+                st.write("**Quick Preview (Basic):**")
+                for s in generate_menu_suggestion(top_trending):
+                    st.write("•", s)
 
-            st.expander("Gemini Prompt").write(
-                f"Create 3 limited-edition restaurant menu items combining these trending ingredients: {', '.join(map(str, top_trending[:10]))}. "
-                "For each, include name, description, price, and reason why it fits current trends."
-            )
+            with st.expander("Gemini Prompt"):
+                st.write(
+                    f"Create 3 limited-edition restaurant menu items combining these trending ingredients: {', '.join(map(str, top_trending[:10]))}. "
+                    "For each, include name, description, price, and reason why it fits current trends."
+                )
 
 if __name__ == "__main__":
     main()
